@@ -1,0 +1,3 @@
+# Minimum CRI-O version to track.
+# All release branches and tags at or above this version are supported.
+1.30

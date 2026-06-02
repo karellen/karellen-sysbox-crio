@@ -1,0 +1,78 @@
+name: karellen-sysbox-crio-update
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force rebuild all versions (delete and recreate releases)'
+        required: false
+        type: boolean
+        default: false
+jobs:
+  check-update:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: master
+
+      - name: Find new upstream tags
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          source ./check-updates.sh
+
+          if [ -z "$NEW_TAGS" ]; then
+              echo "# No new tags found - exiting!" >> $GITHUB_STEP_SUMMARY
+              echo "new_tags=" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+
+          echo "new_tags=${NEW_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "# New tags to build: ${NEW_TAGS}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Trigger builds for new tags
+        if: steps.check.outputs.new_tags != ''
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          NEW_TAGS: ${{ steps.check.outputs.new_tags }}
+          FORCE: ${{ inputs.force }}
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          FAILURES=0
+          COUNT=0
+          for tag in $NEW_TAGS; do
+              echo "Triggering build for $tag"
+              FORCE_FLAG=""
+              if [ "${FORCE:-}" = "true" ]; then
+                  FORCE_FLAG="-f force=true"
+              fi
+              if ! gh workflow run build.yml -f crio_tag="$tag" $FORCE_FLAG; then
+                  echo "WARNING: Failed to trigger build for $tag" >> $GITHUB_STEP_SUMMARY
+                  FAILURES=$((FAILURES + 1))
+              fi
+              COUNT=$((COUNT + 1))
+              # Throttle: avoid hitting API rate limits on initial run
+              if [ $((COUNT % 10)) -eq 0 ]; then
+                  echo "Pausing after $COUNT triggers..."
+                  sleep 30
+              fi
+          done
+
+          if [ "$FAILURES" -gt 0 ]; then
+              echo "# $FAILURES out of $COUNT triggers failed" >> $GITHUB_STEP_SUMMARY
+              exit 1
+          fi

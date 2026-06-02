@@ -1,0 +1,35 @@
+#
+# CRI-O build container Dockerfile
+#
+
+FROM ubuntu:jammy
+
+ARG sys_arch
+ENV SYS_ARCH=${sys_arch}
+
+ARG GO_VERSION=1.24.3
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    make \
+    wget \
+    ca-certificates \
+    gcc \
+    pkg-config \
+    libseccomp-dev
+
+RUN wget https://golang.org/dl/go${GO_VERSION}.linux-${sys_arch}.tar.gz && \
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-${sys_arch}.tar.gz && \
+    rm go${GO_VERSION}.linux-${sys_arch}.tar.gz
+
+ENV GOPATH /go
+ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
+RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && \
+    chmod -R 777 "$GOPATH"
+
+COPY scripts/crio-build.sh /usr/bin/crio-build.sh
+RUN chmod +x /usr/bin/crio-build.sh
+
+WORKDIR /root
+CMD ["/usr/bin/crio-build.sh"]
