@@ -1,0 +1,158 @@
+name: Build CRI-O Binaries
+on:
+  workflow_dispatch:
+    inputs:
+      crio_tag:
+        description: 'Upstream CRI-O tag to build (e.g. v1.35.3)'
+        required: true
+        type: string
+      force:
+        description: 'Force rebuild (clobber existing release)'
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: write
+jobs:
+  draft-release:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CRIO_TAG: ${{ inputs.crio_tag }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create draft release
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          # If a published release exists
+          if gh release view "$CRIO_TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx false; then
+              if [ "$FORCE" = "true" ]; then
+                  echo "Force mode: converting published release $CRIO_TAG back to draft"
+                  gh release edit "$CRIO_TAG" --draft
+              else
+                  echo "Published release $CRIO_TAG already exists — skipping"
+                  exit 0
+              fi
+          fi
+
+          # If a draft exists (from a failed or in-progress build), reuse it
+          if gh release view "$CRIO_TAG" > /dev/null 2>&1; then
+              echo "Draft release $CRIO_TAG already exists — reusing"
+              exit 0
+          fi
+
+          gh release create "$CRIO_TAG" --draft \
+            --title "CRI-O ${CRIO_TAG} (sysbox-patched)" \
+            --notes "Build in progress..."
+
+  build:
+    needs: draft-release
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    continue-on-error: false
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CRIO_TAG: ${{ inputs.crio_tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make gcc pkg-config libseccomp-dev
+
+      - name: Fetch upstream tags
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+          git -C cri-o fetch --tags origin
+
+      - name: Checkout and patch
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          MINOR="$(echo "$CRIO_TAG" | sed 's/\.[^.]*$//')"
+          echo "Building CRI-O ${CRIO_TAG} (patches: ${MINOR})"
+
+          git -C cri-o checkout -q "$CRIO_TAG"
+          ./patch.sh "$MINOR"
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: cri-o/go.mod
+
+      - name: Build
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          make -C cri-o bin/crio-static bin/pinns
+
+          mkdir -p bin
+          cp cri-o/bin/crio-static bin/crio
+          cp cri-o/bin/pinns bin/pinns
+          chmod +x bin/crio bin/pinns
+
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          file bin/crio
+          file bin/pinns
+          bin/crio version || true
+
+      - name: Upload to draft release
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          ARCH="${{ matrix.arch }}"
+
+          tar -czf "crio-${CRIO_TAG}-${ARCH}.tar.gz" -C bin crio pinns
+          gh release upload "$CRIO_TAG" --clobber "crio-${CRIO_TAG}-${ARCH}.tar.gz"
+
+  publish-release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CRIO_TAG: ${{ inputs.crio_tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          gh release edit "$CRIO_TAG" --draft=false \
+            --notes "Patched CRI-O ${CRIO_TAG} binaries for Sysbox K8s integration."

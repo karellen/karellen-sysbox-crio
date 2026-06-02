@@ -1,0 +1,35 @@
+From 1a947e13b2eda301b20507f85376a6e7fae471c4 Mon Sep 17 00:00:00 2001
+From: Cesar Talledo <cesar.talledo@docker.com>
+Date: Fri, 6 Dec 2024 21:26:36 -0800
+Subject: [PATCH] configure_sysctls: ignore error if sysctls is not present.
+
+sysctls that are present on a host may not be present when the user-namespace is
+unshared (e.g., /proc/sys/net/core/somaxconn in kernel 5.15). When configuring
+sysctls for a pod with the user-namespace, if the sysctl is not present, ignore
+it.
+
+Signed-off-by: Cesar Talledo <cesar.talledo@docker.com>
+---
+ pinns/src/sysctl.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/pinns/src/sysctl.c b/pinns/src/sysctl.c
+index 52ecd178050..c9a8dc2038a 100644
+--- a/pinns/src/sysctl.c
++++ b/pinns/src/sysctl.c
+@@ -86,8 +86,13 @@ static int write_sysctl_to_file (char * sysctl_key, char* sysctl_value)
+   _cleanup_close_ int fd = openat (dirfd, sysctl_key, O_WRONLY);
+   if (UNLIKELY (fd < 0))
+   {
+-    pwarnf ("failed to open /proc/sys/%s", sysctl_key);
+-    return -1;
++    if (errno == ENOENT) {
++      pwarnf("sysctl /proc/sys/%s not present; ignoring it", sysctl_key);
++      return 0;
++    } else {
++      pwarnf ("failed to open file /proc/sys/%s", sysctl_key);
++      return -1;
++    }
+   }
+ 
+   int ret = TEMP_FAILURE_RETRY (write (fd, sysctl_value, strlen (sysctl_value)));

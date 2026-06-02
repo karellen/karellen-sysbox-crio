@@ -1,0 +1,42 @@
+From 286396be1de260de90d5edec2c575cb3bbf751e2 Mon Sep 17 00:00:00 2001
+From: Cesar Talledo <ctalledo@nestybox.com>
+Date: Sat, 27 Nov 2021 23:15:45 +0000
+Subject: [PATCH] Add a crio-static target using local build (much faster than
+ the build-static target).
+
+Signed-off-by: Cesar Talledo <ctalledo@nestybox.com>
+---
+ Makefile | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/Makefile b/Makefile
+index 21b09aeb880..0ab9fe6d4ef 100644
+--- a/Makefile
++++ b/Makefile
+@@ -116,6 +116,7 @@ BASE_LDFLAGS = ${SHRINKFLAGS} \
+ 	-X ${PROJECT}/internal/version.buildDate=${BUILD_DATE}
+ 
+ GO_LDFLAGS = -ldflags '${BASE_LDFLAGS} ${EXTRA_LDFLAGS}'
++GO_LDFLAGS_STATIC = -ldflags '${BASE_LDFLAGS} ${EXTRA_LDFLAGS} -w -extldflags -static'
+ 
+ all: binaries crio.conf docs
+ 
+@@ -184,6 +185,9 @@ test/nri/nri.test: $(wildcard test/nri/*.go)
+ bin/crio: $(GO_FILES)
+ 	$(GO_BUILD) $(GCFLAGS) $(GO_LDFLAGS) -tags "$(BUILDTAGS)" -o $@ $(PROJECT)/cmd/crio
+ 
++bin/crio-static: $(GO_FILES)
++	$(GO_BUILD) $(GCFLAGS) $(GO_LDFLAGS_STATIC) -tags "$(BUILDTAGS) netgo osusergo static_build containers_image_openpgp" -o $@ $(PROJECT)/cmd/crio
++
+ build-static:
+ 	$(CONTAINER_RUNTIME) run --network=host --rm --privileged -ti -v /:/mnt \
+ 		$(NIX_IMAGE) cp -rfT /nix /mnt/nix
+@@ -402,7 +406,7 @@ codecov:
+ localintegration: clean binaries test-binaries
+ 	./test/test_runner.sh ${TESTFLAGS}
+ 
+-binaries: bin/crio bin/pinns
++binaries: bin/crio bin/pinns bin/crio-static
+ 
+ test-binaries: test/copyimg/copyimg test/checkseccomp/checkseccomp test/checkcriu/checkcriu \
+ 	test/nri/nri.test

@@ -1,0 +1,4 @@
+bin/
+*.orig
+*.rej
+.claude-tmp/
