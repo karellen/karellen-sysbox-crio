@@ -51,7 +51,7 @@ To raise the minimum supported version, edit `supported-versions`.
 ## Build Artifacts
 
 One GitHub release per upstream CRI-O tag. Each release contains:
-- `crio-v<tag>-amd64.tar.gz` — static `crio` and `pinns` binaries for amd64
-- `crio-v<tag>-arm64.tar.gz` — static `crio` and `pinns` binaries for arm64
+- `crio-v<tag>-amd64.tar.gz` — static `crio`, `pinns`, and `crictl` binaries for amd64
+- `crio-v<tag>-arm64.tar.gz` — static `crio`, `pinns`, and `crictl` binaries for arm64
 
 These are consumed by karellen-sysbox's k8s deployment image build.

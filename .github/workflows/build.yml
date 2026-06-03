@@ -118,6 +118,33 @@ jobs:
           cp cri-o/bin/pinns bin/pinns
           chmod +x bin/crio bin/pinns
 
+      - name: Download crictl
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          MINOR="$(echo "$CRIO_TAG" | sed 's/\.[^.]*$//')"
+          ARCH="${{ matrix.arch }}"
+
+          CRICTL_TAG=$(gh release list -R kubernetes-sigs/cri-tools --exclude-drafts --limit 100 \
+              --json tagName --jq '.[].tagName' | grep "^${MINOR}\." | sort -V | tail -1)
+
+          if [ -z "$CRICTL_TAG" ]; then
+              echo "ERROR: No crictl release found for ${MINOR}" >&2
+              exit 1
+          fi
+
+          echo "Downloading crictl ${CRICTL_TAG} for ${ARCH} ..."
+
+          gh release download "$CRICTL_TAG" -R kubernetes-sigs/cri-tools \
+              --pattern "crictl-${CRICTL_TAG}-linux-${ARCH}.tar.gz" \
+              --dir .
+
+          tar -xzf "crictl-${CRICTL_TAG}-linux-${ARCH}.tar.gz" -C bin
+          rm -f "crictl-${CRICTL_TAG}-linux-${ARCH}.tar.gz"
+          chmod +x bin/crictl
+
       - name: Verify artifacts
         shell: bash
         run: |
@@ -126,6 +153,7 @@ jobs:
 
           file bin/crio
           file bin/pinns
+          file bin/crictl
           bin/crio version || true
 
       - name: Upload to draft release
@@ -136,7 +164,7 @@ jobs:
 
           ARCH="${{ matrix.arch }}"
 
-          tar -czf "crio-${CRIO_TAG}-${ARCH}.tar.gz" -C bin crio pinns
+          tar -czf "crio-${CRIO_TAG}-${ARCH}.tar.gz" -C bin crio pinns crictl
           gh release upload "$CRIO_TAG" --clobber "crio-${CRIO_TAG}-${ARCH}.tar.gz"
 
   publish-release:

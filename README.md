@@ -35,7 +35,8 @@ one release per upstream CRI-O tag. Each release contains:
 - `crio-v<tag>-amd64.tar.gz`
 - `crio-v<tag>-arm64.tar.gz`
 
-Each tarball includes the static `crio` and `pinns` binaries.
+Each tarball includes the static `crio` and `pinns` binaries, plus a matching
+`crictl` binary from [kubernetes-sigs/cri-tools](https://github.com/kubernetes-sigs/cri-tools).
 
 ## Supported versions
 
