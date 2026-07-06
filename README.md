@@ -51,7 +51,10 @@ All CRI-O minor and micro releases at or above the minimum version in
    a build for each missing tag.
 3. **`build.yml`** checks out the CRI-O submodule at the target tag, applies
    patches via `patch.sh`, builds static binaries on native amd64 and arm64
-   runners, and publishes a GitHub release.
+   runners, and publishes a GitHub release. After publishing, it notifies
+   [karellen-sysbox](https://github.com/karellen/karellen-sysbox) via
+   `repository_dispatch` so the `sysbox-deploy-k8s` images are repackaged
+   with the new CRI-O binaries.
 
 Both workflows accept a **force** option for manual dispatch that rebuilds and
 clobbers existing releases.

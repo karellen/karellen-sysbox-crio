@@ -184,3 +184,17 @@ jobs:
 
           gh release edit "$CRIO_TAG" --draft=false \
             --notes "Patched CRI-O ${CRIO_TAG} binaries for Sysbox K8s integration."
+
+      # The karellen-sysbox K8s deploy images bundle all published CRI-O
+      # releases, so ask karellen-sysbox to repackage them with the new one.
+      - name: Trigger sysbox-deploy-k8s image rebuild
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          gh api repos/karellen/karellen-sysbox/dispatches \
+            -f event_type=crio-release \
+            -f "client_payload[crio_tag]=${CRIO_TAG}"

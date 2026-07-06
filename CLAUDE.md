@@ -35,7 +35,9 @@ Patch 1 differs across versions due to upstream refactors and lives in
   GitHub releases, triggers `build.yml` for each missing tag
 - `build.yml` — Builds a single CRI-O tag (via `workflow_dispatch`), creates a
   GitHub release per tag with per-arch tarballs (e.g. `v1.35.3` release contains
-  `crio-v1.35.3-amd64.tar.gz` and `crio-v1.35.3-arm64.tar.gz`)
+  `crio-v1.35.3-amd64.tar.gz` and `crio-v1.35.3-arm64.tar.gz`). After publishing,
+  sends a `repository_dispatch` (event type `crio-release`) to karellen-sysbox
+  so its K8s deploy images get repackaged with the new CRI-O binaries
 
 ## Adding a New CRI-O Version
 
