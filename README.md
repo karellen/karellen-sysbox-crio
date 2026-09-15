@@ -24,7 +24,9 @@ Three patches are applied to each CRI-O version, originally from the
 Patches 2 and 3 are common across all supported versions. Patch 1 differs
 across CRI-O minor versions due to upstream refactors; version-specific variants
 live under `patches/v<minor>/`. When no version-specific directory exists,
-`patch.sh` falls back to the highest available patch set.
+`patch.sh` falls back to the highest patch set that is not newer than the
+requested version. It never falls forward to a newer set, since those are
+written against later upstream refactors.
 
 ## Build artifacts
 

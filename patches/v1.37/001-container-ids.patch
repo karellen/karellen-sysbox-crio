@@ -1,0 +1,271 @@
+From 3b0975b01830182f326eb6fd187635310d843b9d Mon Sep 17 00:00:00 2001
+From: Cesar Talledo <ctalledo@nestybox.com>
+Date: Sun, 17 Oct 2021 01:08:07 +0000
+Subject: [PATCH] Interpret pod security context IDs as container IDs instead
+ of host IDs.
+
+Small customization in CRI-O to improve container user-ns isolation; we plan to
+work with the CRI-O team to upstream this (or a similar) change.
+
+Problem: for user-ns mappings, CRI-O currently interprets the UID & GIDs in the
+pod's spec security context as host IDs rather than container IDs. For example,
+"runAsUser: 1000" causes CRI-O to map the root user in the container to host ID
+1000, and "runAsUser: 0" causes CRI-O to map the root user in the container to
+host ID 0. This is not ideal for container isolation for obvious reasons, and it
+also makes it harder on users since they now need to worry about host ID
+mappings. But it was done by design on CRI-O given that filesystem user ID
+shifting/remapping is not yet widely available.
+
+Solution: for low-level container runtimes such as Sysbox that support
+filesystem user ID shifting/remapping, we don't need the pod's security context
+to refer to Host IDs. In fact, we want the pod's security context to refer to
+container IDs instead, as this is easier for users to understand and provides
+stronger container isolation (i.e., users only worry about IDs in the container
+and let the underlying runtime choose the proper user-ns host ID mappings to
+ensure container isolation).
+
+For example, "runAsUser: 1000" should cause CRI-O to start all containers in the
+pod as user 1000 within the container, and map all user IDs in the container to
+a range of unprivileged host IDs chosen by CRI-O. Similarly, "runAsUser: 0"
+should cause CRI-O to start all containers in the pod as user 0 within the
+container and map all user IDs in the container to unprivileged host IDs chosen
+by CRI-O.
+
+This commit applies the solution described above.
+
+Signed-off-by: Cesar Talledo <ctalledo@nestybox.com>
+Signed-off-by: Rodny Molina <rodny.molina@docker.com>
+---
+ server/sandbox_run_linux.go | 122 ++++++++++++++++++++++++++++++++------------
+ 1 file changed, 88 insertions(+), 34 deletions(-)
+
+diff --git a/server/sandbox_run_linux.go b/server/sandbox_run_linux.go
+index a3fdc10a8..1b03a72dd 100644
+--- a/server/sandbox_run_linux.go
++++ b/server/sandbox_run_linux.go
+@@ -122,6 +122,42 @@ func (s *Server) configureSandboxIDMappings(
+ 		return nil, nil
+ 	}
+ 
++	// Nestybox: small customization in CRI-O to improve container user-ns
++	// isolation; we plan to work with the CRI-O team to upstream this (or a
++	// similar) change.
++	//
++	// Problem: for user-ns mappings, CRI-O currently interprets the UID & GIDs
++	// in the pod's spec security context as host IDs rather than container
++	// IDs. For example, "runAsUser: 1000" causes CRI-O to map the root user in
++	// the container to host ID 1000, and "runAsUser: 0" causes CRI-O to map the
++	// root user in the container to host ID 0. This is not ideal for container
++	// isolation for obvious reasons, and it also makes it harder on users since
++	// they now need to worry about host ID mappings. But it was done by design
++	// on CRI-O given that filesystem user ID shifting/remapping is not yet
++	// widely available.
++	//
++	// Solution: for low-level container runtimes such as Sysbox that support
++	// filesystem user ID shifting/remapping, we don't need the pod's security
++	// context to refer to Host IDs. In fact, we want the pod's security context
++	// to refer to container IDs instead, as this is easier for users to
++	// understand and provides stronger container isolation (i.e., users only
++	// worry about IDs in the container and let the underlying runtime choose the
++	// proper user-ns host ID mappings to ensure container isolation).
++	//
++	// For example, "runAsUser: 1000" should cause CRI-O to start all containers
++	// in the pod as user 1000 within the container, and map all user IDs in the
++	// container to a range of unprivileged host IDs chosen by CRI-O. Similarly,
++	// "runAsUser: 0" should cause CRI-O to start all containers in the pod as
++	// user 0 within the container and map all user IDs in the container to
++	// unprivileged host IDs chosen by CRI-O.
++	//
++	// The variable podSecCtxIDsAreContainerIDs, when set to true, achieves this.
++	//
++	// Note that a user can always specify the mapping for the pod via the
++	// uidmapping and gidmapping annotations.
++
++	podSecCtxIDsAreContainerIDs := true
++
+ 	// expect a configuration like: private:uidmapping=0:1000:2000,2000:1000:2000;gidmapping=0:1000:4000,4000:1000:2000
+ 	parts := strings.SplitN(mode, ":", 2)
+ 
+@@ -144,32 +180,34 @@ func (s *Server) configureSandboxIDMappings(
+ 	minimumMappableUID, minimumMappableGID := s.minimumMappableUID, s.minimumMappableGID
+ 
+ 	if uidMappingsPresent || gidMappingsPresent {
+-		user := sc.GetRunAsUser()
+-		if user == nil {
+-			return nil, errors.New("cannot use uidmapping or gidmapping if RunAsUser is not set")
+-		}
+-
+-		if user.GetValue() != 0 {
+-			if minimumMappableUID < 0 {
+-				return nil, errors.New(
+-					"cannot use uidmapping or gidmapping if not running as root and minimum mappable ID is not set",
+-				)
++		if !podSecCtxIDsAreContainerIDs {
++			user := sc.GetRunAsUser()
++			if user == nil {
++				return nil, errors.New("cannot use uidmapping or gidmapping if RunAsUser is not set")
+ 			}
+ 
+-			if user.GetValue() < minimumMappableUID {
+-				return nil, fmt.Errorf(
+-					"cannot use uidmapping or gidmapping if running as a UID below minimum mappable ID %d",
+-					minimumMappableUID,
+-				)
++			if user.GetValue() != 0 {
++				if minimumMappableUID < 0 {
++					return nil, errors.New(
++						"cannot use uidmapping or gidmapping if not running as root and minimum mappable ID is not set",
++					)
++				}
++
++				if user.GetValue() < minimumMappableUID {
++					return nil, fmt.Errorf(
++						"cannot use uidmapping or gidmapping if running as a UID below minimum mappable ID %d",
++						minimumMappableUID,
++					)
++				}
+ 			}
+ 		}
+ 	}
+ 
+ 	switch parts[0] {
+ 	case "auto":
+-		return s.configureAutoUserNS(mode, values, sc, minimumMappableUID, minimumMappableGID)
++		return s.configureAutoUserNS(mode, values, sc, minimumMappableUID, minimumMappableGID, podSecCtxIDsAreContainerIDs)
+ 	case "private":
+-		return s.configurePrivateUserNS(values, sc, minimumMappableUID, minimumMappableGID)
++		return s.configurePrivateUserNS(values, sc, minimumMappableUID, minimumMappableGID, podSecCtxIDsAreContainerIDs)
+ 	}
+ 
+ 	return nil, fmt.Errorf("invalid userns mode: %q", mode)
+@@ -180,6 +218,7 @@ func (s *Server) configureAutoUserNS(
+ 	values map[string]string,
+ 	sc *types.LinuxSandboxSecurityContext,
+ 	minimumMappableUID, minimumMappableGID int64,
++	podSecCtxIDsAreContainerIDs bool,
+ ) (*storage.IDMappingOptions, error) {
+ 	const t = "true"
+ 
+@@ -187,11 +226,20 @@ func (s *Server) configureAutoUserNS(
+ 		AutoUserNs: true,
+ 	}
+ 
++	// If keep-id=true then the UID:GID won't be changed inside of the user namespace and it
++	// will map to the same value on the host.
+ 	keepID := values["keep-id"] == t
+ 
+-	mapToRoot := values["map-to-root"] == t
+-	if keepID && mapToRoot {
+-		return nil, fmt.Errorf("cannot use both keep-id and map-to-root: %q", mode)
++	mapToRoot := false
++
++	if !podSecCtxIDsAreContainerIDs {
++		// Map to root only makes sense when pod security context uses host IDs.
++		// If map-to-root=true then the UID:GID will be mapped to root inside
++		// of the user namespace.
++		mapToRoot = values["map-to-root"] == t
++		if keepID && mapToRoot {
++			return nil, fmt.Errorf("cannot use both keep-id and map-to-root: %q", mode)
++		}
+ 	}
+ 
+ 	if v, ok := values["size"]; ok {
+@@ -227,9 +275,9 @@ func (s *Server) configureAutoUserNS(
+ 			gids...)
+ 	}
+ 
+-	s.addAutoUserNSRunAsUserMapping(ret, sc, keepID, mapToRoot)
+-	s.addAutoUserNSRunAsGroupMapping(ret, sc, keepID, mapToRoot)
+-	s.addAutoUserNSSupplementalGroupsMappings(ret, sc, keepID)
++	s.addAutoUserNSRunAsUserMapping(ret, sc, keepID, mapToRoot, podSecCtxIDsAreContainerIDs)
++	s.addAutoUserNSRunAsGroupMapping(ret, sc, keepID, mapToRoot, podSecCtxIDsAreContainerIDs)
++	s.addAutoUserNSSupplementalGroupsMappings(ret, sc, keepID, podSecCtxIDsAreContainerIDs)
+ 
+ 	if err := s.validateIDMappings(
+ 		ret.AutoUserNsOpts.AdditionalUIDMappings,
+@@ -247,6 +295,7 @@ func (s *Server) addAutoUserNSRunAsUserMapping(
+ 	ret *storage.IDMappingOptions,
+ 	sc *types.LinuxSandboxSecurityContext,
+ 	keepID, mapToRoot bool,
++	podSecCtxIDsAreContainerIDs bool,
+ ) {
+ 	if sc.GetRunAsUser() != nil {
+ 		if keepID || mapToRoot {
+@@ -262,7 +311,7 @@ func (s *Server) addAutoUserNSRunAsUserMapping(
+ 					HostID:      int(sc.GetRunAsUser().GetValue()),
+ 					Size:        1,
+ 				})
+-		} else {
++		} else if !podSecCtxIDsAreContainerIDs {
+ 			m := addToMappingsIfMissing(
+ 				ret.AutoUserNsOpts.AdditionalUIDMappings,
+ 				sc.GetRunAsUser().GetValue(),
+@@ -276,6 +325,7 @@ func (s *Server) addAutoUserNSRunAsGroupMapping(
+ 	ret *storage.IDMappingOptions,
+ 	sc *types.LinuxSandboxSecurityContext,
+ 	keepID, mapToRoot bool,
++	podSecCtxIDsAreContainerIDs bool,
+ ) {
+ 	if sc.GetRunAsGroup() != nil {
+ 		if keepID || mapToRoot {
+@@ -291,7 +341,7 @@ func (s *Server) addAutoUserNSRunAsGroupMapping(
+ 					HostID:      int(sc.GetRunAsGroup().GetValue()),
+ 					Size:        1,
+ 				})
+-		} else {
++		} else if !podSecCtxIDsAreContainerIDs {
+ 			m := addToMappingsIfMissing(
+ 				ret.AutoUserNsOpts.AdditionalGIDMappings,
+ 				sc.GetRunAsGroup().GetValue(),
+@@ -305,6 +355,7 @@ func (s *Server) addAutoUserNSSupplementalGroupsMappings(
+ 	ret *storage.IDMappingOptions,
+ 	sc *types.LinuxSandboxSecurityContext,
+ 	keepID bool,
++	podSecCtxIDsAreContainerIDs bool,
+ ) {
+ 	for _, g := range sc.GetSupplementalGroups() {
+ 		if keepID {
+@@ -315,7 +366,7 @@ func (s *Server) addAutoUserNSSupplementalGroupsMappings(
+ 					HostID:      int(g),
+ 					Size:        1,
+ 				})
+-		} else {
++		} else if !podSecCtxIDsAreContainerIDs {
+ 			m := addToMappingsIfMissing(ret.AutoUserNsOpts.AdditionalGIDMappings, g)
+ 			ret.AutoUserNsOpts.AdditionalGIDMappings = m
+ 		}
+@@ -359,6 +410,7 @@ func (s *Server) configurePrivateUserNS(
+ 	values map[string]string,
+ 	sc *types.LinuxSandboxSecurityContext,
+ 	minimumMappableUID, minimumMappableGID int64,
++	podSecCtxIDsAreContainerIDs bool,
+ ) (*storage.IDMappingOptions, error) {
+ 	var (
+ 		uids, gids []idtools.IDMap
+@@ -394,16 +446,18 @@ func (s *Server) configurePrivateUserNS(
+ 		}
+ 	}
+ 
+-	if sc.GetRunAsUser() != nil {
+-		uids = addToMappingsIfMissing(uids, sc.GetRunAsUser().GetValue())
+-	}
++	if !podSecCtxIDsAreContainerIDs {
++		if sc.GetRunAsUser() != nil {
++			uids = addToMappingsIfMissing(uids, sc.GetRunAsUser().GetValue())
++		}
+ 
+-	if sc.GetRunAsGroup() != nil {
+-		gids = addToMappingsIfMissing(gids, sc.GetRunAsGroup().GetValue())
+-	}
++		if sc.GetRunAsGroup() != nil {
++			gids = addToMappingsIfMissing(gids, sc.GetRunAsGroup().GetValue())
++		}
+ 
+-	for _, g := range sc.GetSupplementalGroups() {
+-		gids = addToMappingsIfMissing(gids, g)
++		for _, g := range sc.GetSupplementalGroups() {
++			gids = addToMappingsIfMissing(gids, g)
++		}
+ 	}
+ 
+ 	if err := s.validateIDMappings(uids, gids, minimumMappableUID, minimumMappableGID); err != nil {

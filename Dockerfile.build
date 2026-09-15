@@ -7,7 +7,9 @@ FROM ubuntu:jammy
 ARG sys_arch
 ENV SYS_ARCH=${sys_arch}
 
-ARG GO_VERSION=1.24.3
+# Bootstrap Go only. crio-build.sh pins GOTOOLCHAIN per CRI-O version from
+# that version's go.mod, so this just needs to be new enough to honour it.
+ARG GO_VERSION=1.26.4
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     ca-certificates \
     gcc \
+    libc6-dev \
     pkg-config \
     libseccomp-dev
 

@@ -27,7 +27,9 @@ Three patches are applied per version, originally from nestybox/cri-o sysbox bra
 Patches 2 and 3 are common across all versions and live at `patches/*.patch`.
 Patch 1 differs across versions due to upstream refactors and lives in
 `patches/v<version>/`. When no version-specific directory exists (e.g. v1.36),
-`patch.sh` falls back to the highest available version's patches.
+`patch.sh` falls back to the highest patch set that is not newer than the
+requested version — never a newer one, which would be written against later
+upstream refactors.
 
 ## CI/CD
 

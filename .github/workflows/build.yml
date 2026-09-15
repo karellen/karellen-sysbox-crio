@@ -100,10 +100,32 @@ jobs:
           git -C cri-o checkout -q "$CRIO_TAG"
           ./patch.sh "$MINOR"
 
+      - name: Resolve Go version
+        id: go
+        shell: bash
+        run: |
+          set -eEux
+          set -o pipefail
+
+          # What go.mod states is a floor, not a pin. Build with the latest
+          # release of that Go train instead: x.y.0 is the least shaken-out
+          # build in a series, and later patches are bug and security fixes.
+          GO_VERSION="$(sed -n 's/^toolchain go//p' cri-o/go.mod)"
+          if [ -z "$GO_VERSION" ]; then
+              GO_VERSION="$(sed -n 's/^go //p' cri-o/go.mod)"
+          fi
+
+          if [ -z "$GO_VERSION" ]; then
+              echo "ERROR: could not determine Go version from cri-o/go.mod" >&2
+              exit 1
+          fi
+
+          echo "version=$(echo "$GO_VERSION" | cut -d. -f1,2).x" >> "$GITHUB_OUTPUT"
+
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: cri-o/go.mod
+          go-version: ${{ steps.go.outputs.version }}
 
       - name: Build
         shell: bash
